@@ -32,6 +32,9 @@ void attendi(){
     ROS_ERROR("uscita");
 
 };  
+typedef baxter_core_msgs::JointCommand jcmd;
+
+
 void mylookupTwist(  tf::TransformListener& l,const std::string& tracking_frame, const std::string& observation_frame, const std::string& reference_frame,
   const ros::Time& time, const ros::Duration& averaging_interval, 
   geometry_msgs::Twist& twist) 
@@ -77,10 +80,7 @@ ros::Time end_time = std::min(target_time + averaging_interval *0.5 , latest_tim
   tf::Vector3 twist_rot = o * (ang / corrected_averaging_interval.toSec());
 
 
-  // This is a twist w/ reference frame in observation_frame  and reference point is in the tracking_frame at the origin (at start_time)
-
-
-  //correct for the position of the reference frame
+  
   tf::StampedTransform inverse;
   l.waitForTransform (reference_frame,tracking_frame,  target_time, ros::Duration(0.5));
   l.lookupTransform(reference_frame,tracking_frame,  target_time, inverse);
@@ -98,40 +98,9 @@ ros::Time end_time = std::min(target_time + averaging_interval *0.5 , latest_tim
 
 
 
-/*#include <Eigen/SVD>
-
-template<typename _Matrix_Type_>
-bool pinv(const _Matrix_Type_ &a, _Matrix_Type_ &result, double epsilon = std::numeric_limits<typename _Matrix_Type_::Scalar>::epsilon())
-{
-  if(a.rows()<a.cols())
-      return false;
-
-  Eigen::JacobiSVD< _Matrix_Type_ > svd = a.jacobiSvd();
-
-  typename _Matrix_Type_::Scalar tolerance = epsilon * std::max(a.cols(), a.rows()) * svd.singularValues().array().abs().maxCoeff();
-
-  result = svd.matrixV() * _Matrix_Type_(_Matrix_Type_( (svd.singularValues().array().abs() > tolerance).select(svd.singularValues().
-      array().inverse(), 0) ).diagonal()) * svd.matrixU().adjoint();
-};
-
-bool pinv(const Eigen::Matrix<double,6,7> &a,  Eigen::Matrix<double,7,6> &result, double epsilon = std::numeric_limits< Eigen::Matrix<double,6,7>::Scalar>::epsilon());
-
-*/
-typedef baxter_core_msgs::JointCommand jcmd;
 
 
-template<int r, int c>
-Eigen::Matrix<double, c,r>  lev(Eigen::Matrix<double, r, c> M,double lambda)
-{
 
-  auto MtM=M.transpose()*M;
-    //cout<<MtM<<endl; 
-    auto invMtM=MtM.inverse();/*
-//cout<<invMtM<<endl;
-Eigen::Matrix<double, nc, nr> Mpinv;*/
-    auto Mpinv=invMtM*(M.transpose()+lambda*MtM*M.transpose());
-    return Mpinv;
-  }
   void copyvect(double* a,const std::initializer_list<double>& b)
   { 
     for (int i=0;i< b.size();i++) {
@@ -190,8 +159,19 @@ Eigen::Matrix<double, nc, nr> Mpinv;*/
    private:
 
    public:
-    ros::NodeHandle n;
-    tf::TransformListener listener;
+    ros::NodeHandle n_ ;
+// KDL members
+    KDL::Tree tree_;
+
+    KDL::Chain limbL_, limbR_;
+
+    KDL::ChainJntToJacSolver *jsL_ , *jsR_ ;
+
+    KDL::JntArray ql_, qr_;
+
+    KDL::Jacobian JL_,JR_;
+
+    tf::TransformListener listener_ ;
     tf::Transformer t;
     ros::Subscriber joint_states_sub;
     sensor_msgs::JointState joint_state;
@@ -201,55 +181,49 @@ Eigen::Matrix<double, nc, nr> Mpinv;*/
     ros::Publisher  pub_speed_ratio;
     ros::Publisher qdot_left_pub;
     ros::Publisher qdot_right_pub ;
-    KDL::Tree tree;
-    KDL::Jacobian jacobianL;
-    KDL::Jacobian jacobianR;
-    KDL::JntArray ql;
-    KDL::JntArray qr;
-    KDL::ChainJntToJacSolver* jsL;
-    KDL::ChainJntToJacSolver* jsR;
-    KDL::Chain limbL;
-    KDL::Chain limbR;
+
+ 
+   
+
+  
     arma::vec desiredQDotR;
     arma::vec desiredQDotL;
     jcmd cmdL, cmdR;
 	// This is the class constructor function
-    Kinematic_controller(KDL::Tree& mytree)
-    { 
+    Kinematic_controller(KDL::Tree& mytree_)    { 
     //Topic you want to publish
-      qdot_left_pub = n.advertise<baxter_core_msgs::JointCommand>("/robot/limb/left/joint_command", 100);
-      qdot_right_pub = n.advertise<baxter_core_msgs::JointCommand>("/robot/limb/right/joint_command", 100);
-      pub_rate = n.advertise<std_msgs::UInt16>("robot/joint_state_publish_rate", 10);
-      pub_speed_ratio = n.advertise<std_msgs::Float64>("robot/limb/left/set_speed_ratio", 10);
-      pub_joint_cmd = n.advertise<baxter_core_msgs::JointCommand>("robot/limb/left/joint_command", 10);
-      pub_joint_cmd_timeout = n.advertise<std_msgs::Float64>("robot/limb/left/joint_command_timeout", 10);
+      qdot_left_pub = n_.advertise<baxter_core_msgs::JointCommand>("/robot/limb/left/joint_command", 100);
+      qdot_right_pub = n_.advertise<baxter_core_msgs::JointCommand>("/robot/limb/right/joint_command", 100);
+      pub_rate = n_.advertise<std_msgs::UInt16>("robot/joint_state_publish_rate", 10);
+      pub_speed_ratio = n_.advertise<std_msgs::Float64>("robot/limb/left/set_speed_ratio", 10);
+      pub_joint_cmd = n_.advertise<baxter_core_msgs::JointCommand>("robot/limb/left/joint_command", 10);
+      pub_joint_cmd_timeout = n_.advertise<std_msgs::Float64>("robot/limb/left/joint_command_timeout", 10);
     //Topic you want to subscribe
-      joint_states_sub= n.subscribe("/robot/joint_states", 100, &Kinematic_controller::callback_joints, this);
+      joint_states_sub= n_.subscribe("/robot/joint_states", 100, &Kinematic_controller::callback_joints, this);
 
-    //Fill tree member
-      tree=mytree;
+    //Fill tree_ member
+      tree_=mytree_;
 
-    // Get single chain from tree
-      tree.getChain ("base","left_hand", limbL);
-      printChain(limbL);
-      tree.getChain ("base","right_hand", limbR);
+    // Get single chain from tree_
+      tree_.getChain ("base","left_hand", limbL_);
+      printChain(limbL_);
+      tree_.getChain ("base","right_hand", limbR_);
 
-/*attendi(()*/
+
     // Create empty Jacobians for the two limbs
-      jacobianL=KDL::Jacobian( limbL.getNrOfJoints() );
-      jacobianR=KDL::Jacobian( limbR.getNrOfJoints() );
+      JL_=KDL::Jacobian( limbL_.getNrOfJoints() );
+      JR_=KDL::Jacobian( limbR_.getNrOfJoints() );
 
-      cout<<jacobianL.data;
-      //attendi();
-    ////cout<<jacobianR.data;
-    // Create empty Jacobians for the two limbs
-      ql=KDL::JntArray( limbL.getNrOfJoints() );
-      qr=KDL::JntArray( limbR.getNrOfJoints() );
 
-	// Create jacobian solvers
-      jsL=new KDL::ChainJntToJacSolver(limbL);
-      jsR=new KDL::ChainJntToJacSolver(limbR);
+    // Create empty  joint angle vectors
+      ql_=KDL::JntArray( limbL_.getNrOfJoints() );
+      qr_=KDL::JntArray( limbR_.getNrOfJoints() );
 
+	 // Create jacobian solvers
+      jsL_=new KDL::ChainJntToJacSolver(limbL_);
+      jsR_=new KDL::ChainJntToJacSolver(limbR_);
+
+  // Target joint velocities
 
       desiredQDotR=arma::vec(7);
       desiredQDotL=arma::vec(7);
@@ -286,7 +260,7 @@ Eigen::Matrix<double, nc, nr> Mpinv;*/
 
 
 
-  ql.data<<joint_state.position[6],
+  ql_.data<<joint_state.position[6],
   joint_state.position[7],
   joint_state.position[4],
   joint_state.position[5],
@@ -294,26 +268,26 @@ Eigen::Matrix<double, nc, nr> Mpinv;*/
   joint_state.position[9],
   joint_state.position[10];
 
-  qr.data<<joint_state.position[15],
+  qr_.data<<joint_state.position[15],
   joint_state.position[16],
   joint_state.position[13],
   joint_state.position[14],
   joint_state.position[17],
   joint_state.position[18],
   joint_state.position[19];
-  cout<<"qr"<<endl<<qr.data<<endl;
-  cout<<"ql"<<endl<<ql.data;
+  cout<<"qr_"<<endl<<qr_.data<<endl;
+  cout<<"ql_"<<endl<<ql_.data;
  //attendi();
   
-  KDL::ChainFkSolverPos_recursive FKSL(limbL);
-  KDL::ChainFkSolverPos_recursive FKSR(limbR);
+  KDL::ChainFkSolverPos_recursive FKSL(limbL_);
+  KDL::ChainFkSolverPos_recursive FKSR(limbR_);
   KDL::Frame torso2wR,torso2wL;
 
-  jsL->JntToJac(ql,jacobianR) ;
-  jsR->JntToJac(qr,jacobianL) ;
-  FKSL.JntToCart(ql,torso2wL);
-  FKSR.JntToCart(qr,torso2wR);
-  Eigen::Matrix4d eigen_torso2wL, eigen_torso2wR;
+  jsL_->JntToJac(ql_,JR_) ;
+  jsR_->JntToJac(qr_,JL_) ;
+  FKSL.JntToCart(ql_,torso2wL);
+  FKSR.JntToCart(qr_,torso2wR);
+  
 
 
   arma::mat JR(6,7,arma::fill::zeros),JL(6,7,arma::fill::zeros);
@@ -322,45 +296,27 @@ Eigen::Matrix<double, nc, nr> Mpinv;*/
 
   for(int i=0;i<6;i++)
     for(int j=0;j<7;j++)
-      JR(i,j)=jacobianR.data(i,j);
+      JR(i,j)=JR_.data(i,j);
 
 
     for(int i=0;i<6;i++)
       for(int j=0;j<7;j++)
-        JL(i,j)=jacobianL.data(i,j);
+        JL(i,j)=JL_.data(i,j);
 
       pinvJR=arma::pinv(JR);
       pinvJL=arma::pinv(JL);
 
       cout<<"JR"<<endl<<JL<<endl;
       attendi();
- 
-
-
-      KDL::Twist desiredTwist,twistL,twistR;
-
-      copyvect(desiredTwist.vel.data,{0,0,0});
-
-      copyvect(desiredTwist.rot.data,{0,Psi*5,0});
-
-    twistL=desiredTwist;
 
 
 
-    twistR=desiredTwist;
-
-      arma::vec etwistL(6,arma::fill::zeros),etwistR(6,arma::fill::zeros);
-
-
-      for(int i=0;i<6;i++){
-        etwistL(i)=twistL(i);
-        etwistR(i)=twistR(i);};
+      arma::vec twistL(6,arma::fill::zeros), twistR(6,arma::fill::zeros);
 
         double r,p,y;
         double X=torso2wL.p[0];
         double Y=torso2wL.p[1];
         double Z=torso2wL.p[2];
-
         torso2wL.M.GetRPY(r,p,y);  
 //Old values
         
@@ -431,18 +387,18 @@ Eigen::Matrix<double, nc, nr> Mpinv;*/
     ros::init(argc, argv, "Kinematic_controller");
 
     bool parsed;
-    KDL::Tree mytree;
-    parsed=kdl_parser::treeFromFile("/home/giorgio/ros_ws/src/baxter_common/baxter_description/urdf/baxter.urdf", mytree);
+    KDL::Tree mytree_;
+    parsed=kdl_parser::treeFromFile("/home/giorgio/ros_ws/src/baxter_common/baxter_description/urdf/baxter.urdf", mytree_);
 
 
     if (!parsed){
-      ROS_ERROR("Failed to construct kdl tree");
+      ROS_ERROR("Failed to construct kdl tree_");
       return false;
     }
     
       KDL::SegmentMap sm;
-      sm=mytree.getSegments();
-      Kinematic_controller kin(mytree);
+      sm=mytree_.getSegments();
+      Kinematic_controller kin(mytree_);
 
       ros::Rate rate(100);
 
@@ -456,7 +412,7 @@ Eigen::Matrix<double, nc, nr> Mpinv;*/
 
 
 
-      while(kin.n.ok()){
+      while(kin.n_.ok()){
 
         ros::WallTime now=ros::WallTime::now();
 
@@ -478,7 +434,7 @@ cout<<"|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
          tf::StampedTransform transform;
          try{
-           kin.listener.lookupTransform("/left_hand", "/right_hand",mytime, transform);
+           kin.listener_.lookupTransform("/left_hand", "/right_hand",mytime, transform);
          }
          catch (tf::TransformException ex){
           ROS_ERROR("%s",ex.what());
@@ -501,7 +457,7 @@ geometry_msgs::Twist handtwistL;
 
 
 try{
-  mylookupTwist( kin.listener,"/left_hand", "/base","/base",ros::Time(), ros::Duration(0.1), handtwistL) ;
+  mylookupTwist( kin.listener_,"/left_hand", "/base","/base",ros::Time(), ros::Duration(0.1), handtwistL) ;
 }
 catch (tf::TransformException ex){
  ROS_ERROR("%s",ex.what());
