@@ -133,8 +133,8 @@ ros::Time end_time = std::min(target_time + averaging_interval *0.5 , latest_tim
       cmdL.command.resize(cmdL.names.size());
       cmdR.command.resize(cmdR.names.size());
 
-      copyvect( &cmdL.command[0],{3.14,90*3.14/180,-0.7854,0,0,0,0});
-      copyvect(&cmdR.command[0],{ 3.14,90*3.14/180,0.7854,0,0,0,0});
+      copyvect( &cmdL.command[0],{0,90*3.14/180,-0.7854,0,0,0,0});
+      copyvect(&cmdR.command[0],{ 0,90*3.14/180,0.7854,0,0,0,0});
 
 
       cmdL.mode = baxter_core_msgs::JointCommand::POSITION_MODE;
@@ -190,7 +190,7 @@ ros::Time end_time = std::min(target_time + averaging_interval *0.5 , latest_tim
     arma::vec desiredQDotL;
     jcmd cmdL, cmdR;
 	// This is the class constructor function
-    Kinematic_controller(KDL::Tree& mytree_)    { 
+    Kinematic_controller(KDL::Tree& mytree_){ 
     //Topic you want to publish
       qdot_left_pub = n_.advertise<baxter_core_msgs::JointCommand>("/robot/limb/left/joint_command", 100);
       qdot_right_pub = n_.advertise<baxter_core_msgs::JointCommand>("/robot/limb/right/joint_command", 100);
@@ -255,26 +255,27 @@ ros::Time end_time = std::min(target_time + averaging_interval *0.5 , latest_tim
 
         //controllare che anche il baxter vero pubblichi questi campi
    joint_state.name= {"head_pan", "l_gripper_l_finger_joint", "l_gripper_r_finger_joint", "left_e0", "left_e1", "left_s0", "left_s1", "left_w0", "left_w1", "left_w2", "r_gripper_l_finger_joint", "r_gripper_r_finger_joint", "right_e0", "right_e1", "right_s0", "right_s1", "right_w0", "right_w1", "right_w2"};
-   for(int i=0;i<19;i++)
+   for(int i=0;i<19;i++){
     joint_state.position[i] = msg->position[i];
+    cout<<endl<<i<<endl<<msg->position[i]<<endl;};
 
 
 
-  ql_.data<<joint_state.position[6],
-  joint_state.position[7],
-  joint_state.position[4],
-  joint_state.position[5],
-  joint_state.position[8],
-  joint_state.position[9],
-  joint_state.position[10];
+  ql_.data<<joint_state.position[6-1],
+  joint_state.position[7-1],
+  joint_state.position[4-1],
+  joint_state.position[5-1],
+  joint_state.position[8-1],
+  joint_state.position[9-1],
+  joint_state.position[10-1];
 
-  qr_.data<<joint_state.position[15],
-  joint_state.position[16],
-  joint_state.position[13],
-  joint_state.position[14],
-  joint_state.position[17],
-  joint_state.position[18],
-  joint_state.position[19];
+  qr_.data<<joint_state.position[15-1],
+  joint_state.position[16-1],
+  joint_state.position[13-1],
+  joint_state.position[14-1],
+  joint_state.position[17-1],
+  joint_state.position[18-1],
+  joint_state.position[19-1];
   cout<<"qr_"<<endl<<qr_.data<<endl;
   cout<<"ql_"<<endl<<ql_.data;
  //attendi();
@@ -287,7 +288,7 @@ ros::Time end_time = std::min(target_time + averaging_interval *0.5 , latest_tim
   jsR_->JntToJac(qr_,JL_) ;
   FKSL.JntToCart(ql_,torso2wL);
   FKSR.JntToCart(qr_,torso2wR);
-  
+  cout<<endl<<"JL"<<endl<<endl<<JL_.data<<endl;
 
 
   arma::mat JR(6,7,arma::fill::zeros),JL(6,7,arma::fill::zeros);
@@ -306,8 +307,8 @@ ros::Time end_time = std::min(target_time + averaging_interval *0.5 , latest_tim
       pinvJR=arma::pinv(JR);
       pinvJL=arma::pinv(JL);
 
-      cout<<"JR"<<endl<<JL<<endl;
-      attendi();
+      cout<<"JL"<<endl<<JL<<endl;
+      //attendi();
 
 
 
@@ -321,7 +322,7 @@ ros::Time end_time = std::min(target_time + averaging_interval *0.5 , latest_tim
 //Old values
         
 
- desiredQDotR<<0<<endr<<0<<endr
+desiredQDotR<<0<<endr<<0<<endr
       <<0<<endr
       <<0<<endr
       <<0<<endr
@@ -333,9 +334,29 @@ ros::Time end_time = std::min(target_time + averaging_interval *0.5 , latest_tim
       <<0<<endr
       <<0<<endr
       <<0<<endr;
+static double I=0;
+static ros::Time to=ros::Time::now();
+double dt=ros::Time::now().toSec()-to.toSec();
+to=ros::Time::now();
+Psi=0;
+I=I+(X-0.8)*dt;
+twistL<<0.0*Psi<<endr
+      <<0.1*Psi<<endr
+      <<0.1*Psi<<endr
+      <<0<<endr
+      <<0<<endr
+      <<1<<endr;
 
-          //desiredQDotR=JR.t()*(etwistR);
-          //desiredQDotL=JL.t()*(etwistR);
+      twistR<<0*Psi<<endr
+      <<-0.1*Psi<<endr
+      <<0.1*Psi<<endr
+      <<0<<endr
+      <<0<<endr
+      <<1<<endr;
+cout<<"X"<<X<<endl;
+
+          desiredQDotR=pinvJR*(twistR)+JR.t()*(twistR);
+          desiredQDotL=pinvJL*(twistL)+JL.t()*(twistR);
 
           cmdL.names.clear();
           cmdR.names.clear();
